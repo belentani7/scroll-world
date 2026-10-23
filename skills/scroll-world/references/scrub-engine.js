@@ -63,6 +63,27 @@
    NOT depend on HTTP byte-range support.
    ========================================================================== */
 
+// Configured links are data, not executable markup. Do not let a generated
+// brand/CTA configuration navigate to javascript:, data:, file:, etc.
+function safeLinkHref(input) {
+  if (typeof input !== 'string') return '#';
+  const href = input.trim();
+  if (!href || /[\u0000-\u001f\u007f\\]/u.test(href)) return '#';
+  if (href.startsWith('//')) return '#';
+  if (href.startsWith('#') || href.startsWith('?') || href.startsWith('/') || href.startsWith('./') || href.startsWith('../')) return href;
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(href);
+  if (scheme) {
+    if (!['https', 'http', 'mailto', 'tel'].includes(scheme[1].toLowerCase())) return '#';
+    if (scheme[1].toLowerCase() === 'https' || scheme[1].toLowerCase() === 'http') {
+      try { if (!new URL(href).hostname) return '#'; } catch { return '#'; }
+    }
+    return href;
+  }
+  // Unknown colon-like syntax is never a relative path.
+  if (href.includes(':')) return '#';
+  return href;
+}
+
 function mountScrollWorld(container, config) {
   const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   // Phone detection. `coarse` is captured once (input type doesn't change mid-session);
@@ -114,14 +135,14 @@ function mountScrollWorld(container, config) {
 
   const topbar = el('div', 'sw-topbar');
   if (config.brand) {
-    const brand = el('a', 'sw-brand'); brand.href = (config.brand.href || '#');
+    const brand = el('a', 'sw-brand'); brand.href = safeLinkHref(config.brand.href);
     brand.appendChild(el('span', 'sw-brand__mark'));
     const nm = el('span', 'sw-brand__name'); nm.textContent = config.brand.name || ''; brand.appendChild(nm);
     topbar.appendChild(brand);
   }
   const nav = el('nav', 'sw-nav'); if (config.nav !== false) topbar.appendChild(nav);
   if (config.cta && config.cta.label) {
-    const c = el('a', 'sw-topcta'); c.href = config.cta.href || '#'; c.textContent = config.cta.label;
+    const c = el('a', 'sw-topcta'); c.href = safeLinkHref(config.cta.href); c.textContent = config.cta.label;
     topbar.appendChild(c);
   }
 
@@ -330,8 +351,8 @@ function mountScrollWorld(container, config) {
   function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
   function ctaBtns(cta) {
     let h = '';
-    if (cta.primary) h += `<a class="sw-btn sw-btn--primary" href="${esc(cta.primary.href || '#')}">${esc(cta.primary.label)}</a>`;
-    if (cta.secondary) h += `<a class="sw-btn sw-btn--ghost" href="${esc(cta.secondary.href || '#')}">${esc(cta.secondary.label)}</a>`;
+    if (cta.primary) h += `<a class="sw-btn sw-btn--primary" href="${esc(safeLinkHref(cta.primary.href))}">${esc(cta.primary.label)}</a>`;
+    if (cta.secondary) h += `<a class="sw-btn sw-btn--ghost" href="${esc(safeLinkHref(cta.secondary.href))}">${esc(cta.secondary.label)}</a>`;
     return h;
   }
 }
@@ -444,5 +465,5 @@ function injectCSS() {
 }
 
 // Expose for module + global use.
-if (typeof module !== 'undefined' && module.exports) module.exports = { mountScrollWorld };
+if (typeof module !== 'undefined' && module.exports) module.exports = { mountScrollWorld, safeLinkHref };
 if (typeof window !== 'undefined') window.mountScrollWorld = mountScrollWorld;
