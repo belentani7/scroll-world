@@ -69,17 +69,28 @@
 function safeLinkUrl(value) {
   if (typeof value !== 'string' || !value.trim() || /[\u0000-\u001f\u007f]/.test(value)) return '#';
   const href = value.trim();
+  // Browsers may normalize backslashes to slashes and change the target origin.
+  if (href.includes('\\')) return '#';
   // Scheme-relative and backslash-prefixed URLs can change origin unexpectedly.
   if (/^[\\/]{2}/.test(href)) return '#';
   try {
     const parsed = new URL(href, 'https://scroll-world.invalid/');
     if (!['http:', 'https:', 'mailto:', 'tel:'].includes(parsed.protocol)) return '#';
+    // Credential-bearing URLs obscure the actual hostname from visitors.
+    if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+        (parsed.username || parsed.password)) return '#';
     // Do not let URL parsing reinterpret malformed absolute HTTP(S) syntax.
     if (/^https?:/i.test(href) && !/^https?:\/\/[^/?#]+/i.test(href)) return '#';
     return href;
   } catch (_) {
     return '#';
   }
+}
+
+// Keep invisible scene copy out of both keyboard focus and the accessibility tree.
+function setCopyInteractivity(copy, interactive) {
+  copy.inert = !interactive;
+  copy.setAttribute('aria-hidden', interactive ? 'false' : 'true');
 }
 
 function mountScrollWorld(container, config) {
@@ -138,7 +149,8 @@ function mountScrollWorld(container, config) {
     const nm = el('span', 'sw-brand__name'); nm.textContent = config.brand.name || ''; brand.appendChild(nm);
     topbar.appendChild(brand);
   }
-  const nav = el('nav', 'sw-nav'); if (config.nav !== false) topbar.appendChild(nav);
+  const nav = el('nav', 'sw-nav'); nav.setAttribute('aria-label', 'Scene shortcuts');
+  if (config.nav !== false) topbar.appendChild(nav);
   if (config.cta && config.cta.label) {
     const c = el('a', 'sw-topcta'); c.href = safeLinkUrl(config.cta.href); c.textContent = config.cta.label;
     topbar.appendChild(c);
@@ -147,6 +159,8 @@ function mountScrollWorld(container, config) {
   const stage = el('div', 'sw-stage');
   const copylayer = el('div', 'sw-copylayer');
   const route = el('div', 'sw-route');
+  route.setAttribute('role', 'navigation');
+  route.setAttribute('aria-label', 'Scene progress');
   const hint = el('div', 'sw-hint');
   const hintText = el('span'); hintText.textContent = config.hint || 'scroll'; hint.appendChild(hintText);
   hint.appendChild(el('i'));
@@ -169,6 +183,7 @@ function mountScrollWorld(container, config) {
   const copies = [], dots = [];
   SECTIONS.forEach((s, i) => {
     const c = el('article', 'sw-copy'); c.style.setProperty('--sw-accent', s.accent || '');
+    setCopyInteractivity(c, false);
     c.innerHTML =
       `<span class="sw-copy__num">${pad(i + 1)} / ${pad(N)}</span>` +
       (s.eyebrow ? `<span class="sw-copy__eyebrow">${esc(s.eyebrow)}</span>` : '') +
@@ -179,11 +194,13 @@ function mountScrollWorld(container, config) {
     copylayer.appendChild(c); copies.push(c);
 
     const dot = el('button', 'sw-route__dot'); dot.style.setProperty('--sw-accent', s.accent || '');
+    dot.setAttribute('aria-label', 'Go to scene ' + (i + 1) + ' of ' + N + ': ' +
+      (s.label || s.title || ('Scene ' + (i + 1))));
     dot.innerHTML = `<span class="sw-route__label">${esc(s.label || '')}</span><i></i>`;
     dot.addEventListener('click', () => jumpTo(i)); route.appendChild(dot); dots.push(dot);
 
     if (config.nav !== false) {
-      const b = el('button', 'sw-nav__item'); b.textContent = s.label || '';
+      const b = el('button', 'sw-nav__item'); b.textContent = s.label || s.title || ('Scene ' + (i + 1));
       b.addEventListener('click', () => jumpTo(i)); nav.appendChild(b);
     }
   });
@@ -272,6 +289,7 @@ function mountScrollWorld(container, config) {
       c.style.opacity = cop;
       c.style.transform = reduce ? 'none' : `translateY(${(0.5 - pr) * 4}vh)`;
       c.style.pointerEvents = cop > 0.5 ? 'auto' : 'none';
+      setCopyInteractivity(c, cop > 0.5);
     }
 
     const cur = SEGMENTS[ci];
@@ -279,8 +297,16 @@ function mountScrollWorld(container, config) {
       : (((y - cur.start) / (cur.end - cur.start)) > 0.5 ? cur.si + 1 : cur.si), 0, N - 1);
     if (near !== activeIndex) {
       activeIndex = near;
-      dots.forEach((d, k) => d.classList.toggle('is-active', k === near));
-      nav.querySelectorAll('.sw-nav__item').forEach((n, k) => n.classList.toggle('is-active', k === near));
+      dots.forEach((d, k) => {
+        d.classList.toggle('is-active', k === near);
+        if (k === near) d.setAttribute('aria-current', 'step');
+        else d.removeAttribute('aria-current');
+      });
+      nav.querySelectorAll('.sw-nav__item').forEach((n, k) => {
+        n.classList.toggle('is-active', k === near);
+        if (k === near) n.setAttribute('aria-current', 'step');
+        else n.removeAttribute('aria-current');
+      });
       container.style.setProperty('--sw-accent', SECTIONS[near].accent || '');
     }
     scrollbarFill.style.transform = `scaleX(${clamp(y / (totalW * vh))})`;
@@ -304,7 +330,7 @@ function mountScrollWorld(container, config) {
       const t = clamp(s.cur, 0, 0.999) * dur;
       if (Math.abs(s.video.currentTime - t) > eps) { try { s.video.currentTime = t; } catch (e) {} }
     }
-    requestAnimationFrame(raf);
+    if (!reduce) requestAnimationFrame(raf);
   }
 
   // iOS needs a user gesture before a muted video will decode/paint reliably. On the
@@ -341,7 +367,8 @@ function mountScrollWorld(container, config) {
   window.addEventListener('orientationchange', layout);
   window.addEventListener('load', layout);
   layout();
-  requestAnimationFrame(raf);
+  // Reduced motion uses stills, not video decoding or perpetual RAF work.
+  if (!reduce) requestAnimationFrame(raf);
 
   // ---- helpers ----
   function el(tag, cls) { const n = document.createElement(tag); if (cls) n.className = cls; return n; }
@@ -418,7 +445,7 @@ function injectCSS() {
   .sw-btn--ghost{color:var(--sw-ink);border:1.5px solid color-mix(in srgb,var(--sw-ink) 25%,transparent);} .sw-btn--ghost:hover{transform:translateY(-2px);}
   .sw-route{position:fixed;right:clamp(14px,2.4vw,30px);top:50%;z-index:40;transform:translateY(-50%);display:flex;flex-direction:column;gap:22px;padding:18px 10px;}
   .sw-route::before{content:"";position:absolute;left:50%;top:22px;bottom:22px;width:2px;transform:translateX(-50%);background:var(--sw-accent);opacity:.28;}
-  .sw-route__dot{position:relative;border:0;background:transparent;cursor:pointer;width:14px;height:14px;display:grid;place-items:center;}
+  .sw-route__dot{position:relative;border:0;background:transparent;cursor:pointer;width:32px;height:32px;display:grid;place-items:center;}
   .sw-route__dot i{width:9px;height:9px;border-radius:50%;background:color-mix(in srgb,var(--sw-accent) 40%,transparent);transition:transform .3s,background .3s,box-shadow .3s;}
   .sw-route__dot:hover i{transform:scale(1.25);background:var(--sw-accent);}
   .sw-route__dot.is-active i{background:var(--sw-accent);transform:scale(1.4);box-shadow:0 0 0 5px color-mix(in srgb,var(--sw-accent) 22%,transparent);}
@@ -439,7 +466,7 @@ function injectCSS() {
     .sw-copy__title{font-size:clamp(1.9rem,7.5vw,2.7rem);}
     .sw-copy__body{max-width:none;font-size:clamp(.98rem,3.6vw,1.1rem);} .sw-scene__video,.sw-scene__still{object-position:center 46%;}
     .sw-hint{bottom:calc(20px + env(safe-area-inset-bottom));}
-    .sw-route{gap:16px;right:6px;} .sw-route__label{display:none;}
+    .sw-route{gap:8px;right:6px;} .sw-route__label{display:none;}
   }
   /* Portrait phones crop a 16:9 clip hard; keep the framing centred so the focal
      subject (which the camera dives toward) stays in view. */
@@ -449,10 +476,11 @@ function injectCSS() {
   /* Touch: give the route dots a finger-sized hit area without growing the visible dot. */
   @media (hover:none) and (pointer:coarse){
     .sw-route{padding:14px 6px;}
-    .sw-route__dot{width:28px;height:28px;}
+    .sw-route__dot{width:44px;height:44px;}
     .sw-btn{padding:15px 26px;}
   }
-  @media (prefers-reduced-motion:reduce){ .sw-hint i::after{animation:none;} .sw-pt{display:none;} }
+  .sw-brand:focus-visible,.sw-topcta:focus-visible,.sw-btn:focus-visible,.sw-nav__item:focus-visible,.sw-route__dot:focus-visible{outline:3px solid var(--sw-ink);outline-offset:3px;}
+  @media (prefers-reduced-motion:reduce){ .sw-hint i::after{animation:none;} .sw-pt{display:none;} .sw-btn,.sw-nav__item,.sw-route__dot i,.sw-route__label,.sw-hint{transition:none;} }
   `;
   // Wrap in a cascade layer so the page's own theme tokens (unlayered
   // :root / .sw-root { --sw-bg / --sw-ink / --sw-accent … }) always win over
@@ -463,5 +491,5 @@ function injectCSS() {
 }
 
 // Expose for module + global use.
-if (typeof module !== 'undefined' && module.exports) module.exports = { mountScrollWorld, safeLinkUrl };
+if (typeof module !== 'undefined' && module.exports) module.exports = { mountScrollWorld, safeLinkUrl, setCopyInteractivity };
 if (typeof window !== 'undefined') window.mountScrollWorld = mountScrollWorld;
