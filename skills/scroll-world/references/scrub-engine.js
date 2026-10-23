@@ -63,6 +63,25 @@
    NOT depend on HTTP byte-range support.
    ========================================================================== */
 
+// Only allow navigable link schemes. Escaping HTML is not sufficient:
+// <a href="javascript:..."> remains executable even when attribute-escaped.
+// Keep safe relative paths/anchors, HTTP(S), mailto and tel links.
+function safeLinkUrl(value) {
+  if (typeof value !== 'string' || !value.trim() || /[\u0000-\u001f\u007f]/.test(value)) return '#';
+  const href = value.trim();
+  // Scheme-relative and backslash-prefixed URLs can change origin unexpectedly.
+  if (/^[\\/]{2}/.test(href)) return '#';
+  try {
+    const parsed = new URL(href, 'https://scroll-world.invalid/');
+    if (!['http:', 'https:', 'mailto:', 'tel:'].includes(parsed.protocol)) return '#';
+    // Do not let URL parsing reinterpret malformed absolute HTTP(S) syntax.
+    if (/^https?:/i.test(href) && !/^https?:\/\/[^/?#]+/i.test(href)) return '#';
+    return href;
+  } catch (_) {
+    return '#';
+  }
+}
+
 function mountScrollWorld(container, config) {
   const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   // Phone detection. `coarse` is captured once (input type doesn't change mid-session);
@@ -114,14 +133,14 @@ function mountScrollWorld(container, config) {
 
   const topbar = el('div', 'sw-topbar');
   if (config.brand) {
-    const brand = el('a', 'sw-brand'); brand.href = (config.brand.href || '#');
+    const brand = el('a', 'sw-brand'); brand.href = safeLinkUrl(config.brand.href);
     brand.appendChild(el('span', 'sw-brand__mark'));
     const nm = el('span', 'sw-brand__name'); nm.textContent = config.brand.name || ''; brand.appendChild(nm);
     topbar.appendChild(brand);
   }
   const nav = el('nav', 'sw-nav'); if (config.nav !== false) topbar.appendChild(nav);
   if (config.cta && config.cta.label) {
-    const c = el('a', 'sw-topcta'); c.href = config.cta.href || '#'; c.textContent = config.cta.label;
+    const c = el('a', 'sw-topcta'); c.href = safeLinkUrl(config.cta.href); c.textContent = config.cta.label;
     topbar.appendChild(c);
   }
 
@@ -330,8 +349,8 @@ function mountScrollWorld(container, config) {
   function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
   function ctaBtns(cta) {
     let h = '';
-    if (cta.primary) h += `<a class="sw-btn sw-btn--primary" href="${esc(cta.primary.href || '#')}">${esc(cta.primary.label)}</a>`;
-    if (cta.secondary) h += `<a class="sw-btn sw-btn--ghost" href="${esc(cta.secondary.href || '#')}">${esc(cta.secondary.label)}</a>`;
+    if (cta.primary) h += `<a class="sw-btn sw-btn--primary" href="${esc(safeLinkUrl(cta.primary.href))}">${esc(cta.primary.label)}</a>`;
+    if (cta.secondary) h += `<a class="sw-btn sw-btn--ghost" href="${esc(safeLinkUrl(cta.secondary.href))}">${esc(cta.secondary.label)}</a>`;
     return h;
   }
 }
@@ -444,5 +463,5 @@ function injectCSS() {
 }
 
 // Expose for module + global use.
-if (typeof module !== 'undefined' && module.exports) module.exports = { mountScrollWorld };
+if (typeof module !== 'undefined' && module.exports) module.exports = { mountScrollWorld, safeLinkUrl };
 if (typeof window !== 'undefined') window.mountScrollWorld = mountScrollWorld;
