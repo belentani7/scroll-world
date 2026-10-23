@@ -6,7 +6,7 @@ const { safeLinkUrl } = require("../skills/scroll-world/references/scrub-engine.
 
 test("allows safe local navigation, HTTPS and contact CTAs", () => {
   for (const href of [
-    "#top", "/", "/pricing?plan=basic", "./about", "../assets", "?tab=about",
+    "#top", "/", "/pricing?plan=basic", "./about", "../assets", "?tab=about", "contact",
     "https://example.org/path", "http://example.org",
     "mailto:hello@example.org", "tel:+34900123456",
   ]) {
@@ -20,7 +20,9 @@ test("does not allow active and foreign schemes", () => {
     "vbscript:msgbox(1)", "file:///etc/passwd", "blob:https://example.org/123",
     "ftp://example.org", "http:///not-valid", "//example.org/path",
     "\\\\example.org\\path", "java\nscript:alert(1)", "javascript:\talert(1)",
-    "\u0000https://example.org",
+    "\u0000https://example.org", "https://", "unknown:payload",
+    "mailto:test@example.com\r\nBCC:other@example.com",
+    "https://example.test/\nalert(1)", " //evil.example",
   ]) {
     assert.equal(safeLinkUrl(href), "#", href);
   }
