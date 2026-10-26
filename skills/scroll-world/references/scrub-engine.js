@@ -93,6 +93,12 @@ function setCopyInteractivity(copy, interactive) {
   copy.setAttribute('aria-hidden', interactive ? 'false' : 'true');
 }
 
+// A missing or failed media asset must not be fetched on every scroll event.
+// The still poster remains visible if its clip cannot be loaded.
+function shouldLoadClip(segment, reducedMotion) {
+  return !reducedMotion && !segment.loading && !segment.failed && Boolean(segment.clip);
+}
+
 function mountScrollWorld(container, config) {
   const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   // Phone detection. `coarse` is captured once (input type doesn't change mid-session);
@@ -176,7 +182,7 @@ function mountScrollWorld(container, config) {
     if (poster) img.src = poster;
     scene.appendChild(img); stage.appendChild(scene);
     s.el = scene; s.img = img; s.video = null; s.hasClip = false;
-    s.loading = false; s.ready = false; s.cur = 0; s.target = 0; s.visible = false;
+    s.loading = false; s.failed = false; s.ready = false; s.cur = 0; s.target = 0; s.visible = false;
   });
 
   // per-section copy / route / nav
@@ -234,7 +240,7 @@ function mountScrollWorld(container, config) {
   function loadClip(s) {
     // Under prefers-reduced-motion we never load the clips at all — the stills stay up
     // and simply cross-dissolve as you scroll. No scrubbed video motion, no decode cost.
-    if (reduce || s.loading || !s.clip) return;
+    if (!shouldLoadClip(s, reduce)) return;
     s.loading = true;
     // Serve the lighter mobile encode on phones when one was provided.
     const url = (isMobile() && s.clipM) ? s.clipM : s.clip;
@@ -252,7 +258,7 @@ function mountScrollWorld(container, config) {
         v.addEventListener('seeked', () => { s.el.classList.add('has-clip'); }, { once: true });
         v.addEventListener('loadeddata', () => { try { v.pause(); } catch (e) {} if (userReady) primeVideo(v); });
         s.el.appendChild(v); s.video = v; s.hasClip = true;
-      }).catch(() => { s.loading = false; });
+      }).catch(() => { s.loading = false; s.failed = true; });
   }
 
   function read() {
@@ -491,5 +497,5 @@ function injectCSS() {
 }
 
 // Expose for module + global use.
-if (typeof module !== 'undefined' && module.exports) module.exports = { mountScrollWorld, safeLinkUrl, setCopyInteractivity };
+if (typeof module !== 'undefined' && module.exports) module.exports = { mountScrollWorld, safeLinkUrl, setCopyInteractivity, shouldLoadClip };
 if (typeof window !== 'undefined') window.mountScrollWorld = mountScrollWorld;
