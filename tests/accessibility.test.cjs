@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { safeLinkUrl, setCopyInteractivity } = require("../skills/scroll-world/references/scrub-engine.js");
+const { safeLinkUrl, setCopyInteractivity, shouldLoadClip } = require("../skills/scroll-world/references/scrub-engine.js");
 
 function mockCopy() {
   const attributes = new Map();
@@ -38,4 +38,18 @@ test("configured CTA links reject backslash normalization and embedded credentia
     assert.equal(safeLinkUrl(href), "#", href);
   }
   assert.equal(safeLinkUrl("https://example.org/contact"), "https://example.org/contact");
+});
+
+test("failed or already-loading clips do not trigger repeated fetches", () => {
+  const segment = { clip: "assets/scene.mp4", loading: false, failed: false };
+  assert.equal(shouldLoadClip(segment, false), true);
+  assert.equal(shouldLoadClip(segment, true), false);
+  segment.loading = true;
+  assert.equal(shouldLoadClip(segment, false), false);
+  segment.loading = false;
+  segment.failed = true;
+  assert.equal(shouldLoadClip(segment, false), false);
+  segment.failed = false;
+  segment.clip = "";
+  assert.equal(shouldLoadClip(segment, false), false);
 });
