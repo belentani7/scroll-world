@@ -116,6 +116,19 @@ function mountScrollWorld(container, config) {
   const N = SECTIONS.length;
   if (!N) return;
 
+  // A SPA unmount must release requests, decoders, object URLs and window handlers.
+  let destroyed = false;
+  const pendingFetches = new Set();
+  const objectUrls = new Set();
+  const animationFrames = new Set();
+  function scheduleFrame(callback) {
+    const id = requestAnimationFrame(() => {
+      animationFrames.delete(id);
+      if (!destroyed) callback();
+    });
+    animationFrames.add(id);
+  }
+
   injectCSS();
   container.classList.add('sw-root');
 
@@ -222,6 +235,7 @@ function mountScrollWorld(container, config) {
   let laidOutW = window.innerWidth;   // width the current layout was computed at (see onResize)
 
   function layout() {
+    if (destroyed) return;
     vh = window.innerHeight;
     laidOutW = window.innerWidth;
     stageX = window.innerWidth > 860 ? 4 : 0;
@@ -244,13 +258,19 @@ function mountScrollWorld(container, config) {
     s.loading = true;
     // Serve the lighter mobile encode on phones when one was provided.
     const url = (isMobile() && s.clipM) ? s.clipM : s.clip;
-    fetch(url).then(r => r.ok ? r.blob() : Promise.reject(new Error('404')))
+    const controller = new AbortController();
+    pendingFetches.add(controller);
+    fetch(url, { signal: controller.signal })
+      .then(r => r.ok ? r.blob() : Promise.reject(new Error('404')))
       .then(blob => {
+        if (destroyed) return;
         const v = document.createElement('video');
         v.className = 'sw-scene__video';
         v.muted = true; v.playsInline = true; v.preload = 'auto';
         v.setAttribute('muted', ''); v.setAttribute('playsinline', '');
-        v.src = URL.createObjectURL(blob);
+        const objectUrl = URL.createObjectURL(blob);
+        objectUrls.add(objectUrl);
+        v.src = objectUrl;
         v.addEventListener('loadedmetadata', () => { s.ready = true; read(); });
         // Reveal the video (hide the still poster) only once a real frame has
         // painted — on iOS a seeked-but-never-played muted video stays blank, so
@@ -258,10 +278,13 @@ function mountScrollWorld(container, config) {
         v.addEventListener('seeked', () => { s.el.classList.add('has-clip'); }, { once: true });
         v.addEventListener('loadeddata', () => { try { v.pause(); } catch (e) {} if (userReady) primeVideo(v); });
         s.el.appendChild(v); s.video = v; s.hasClip = true;
-      }).catch(() => { s.loading = false; s.failed = true; });
+      }).catch(() => {
+        if (!destroyed) { s.loading = false; s.failed = true; }
+      }).finally(() => { pendingFetches.delete(controller); });
   }
 
   function read() {
+    if (destroyed) return;
     const y = window.scrollY || window.pageYOffset;
     const fade = CROSSFADE * vh;
     let ci = 0;
@@ -322,6 +345,7 @@ function mountScrollWorld(container, config) {
   }
 
   function raf() {
+    if (destroyed) return;
     const eps = isMobile() ? 0.02 : 0.008;   // coarser seek step on phones = fewer decodes
     for (let i = 0; i < NSEG; i++) {
       const s = SEGMENTS[i];
@@ -336,7 +360,7 @@ function mountScrollWorld(container, config) {
       const t = clamp(s.cur, 0, 0.999) * dur;
       if (Math.abs(s.video.currentTime - t) > eps) { try { s.video.currentTime = t; } catch (e) {} }
     }
-    if (!reduce) requestAnimationFrame(raf);
+    if (!reduce) scheduleFrame(raf);
   }
 
   // iOS needs a user gesture before a muted video will decode/paint reliably. On the
@@ -359,7 +383,10 @@ function mountScrollWorld(container, config) {
 
   // Particles are a per-frame cost we can't afford alongside video scrubbing on a phone.
   seedParticles(particles, reduce || coarse);
-  window.addEventListener('scroll', () => { if (!ticking) { ticking = true; requestAnimationFrame(read); } }, { passive: true });
+  function onScroll() {
+    if (!ticking && !destroyed) { ticking = true; scheduleFrame(read); }
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
   // Mobile browsers fire `resize` every time the URL bar slides in/out. Re-running
   // layout() there rebuilds the track height and yanks the scroll position, so on
   // touch we ignore height-only changes and only relayout when the width actually
@@ -374,7 +401,36 @@ function mountScrollWorld(container, config) {
   window.addEventListener('load', layout);
   layout();
   // Reduced motion uses stills, not video decoding or perpetual RAF work.
-  if (!reduce) requestAnimationFrame(raf);
+  if (!reduce) scheduleFrame(raf);
+
+  // Idempotent cleanup. Keep the shared stylesheet for other mounted instances.
+  function destroy() {
+    if (destroyed) return;
+    destroyed = true;
+    pendingFetches.forEach(controller => controller.abort());
+    pendingFetches.clear();
+    animationFrames.forEach(id => cancelAnimationFrame(id));
+    animationFrames.clear();
+    window.removeEventListener('pointerdown', onFirstGesture);
+    window.removeEventListener('touchstart', onFirstGesture);
+    window.removeEventListener('scroll', onScroll);
+    window.removeEventListener('resize', onResize);
+    window.removeEventListener('orientationchange', layout);
+    window.removeEventListener('load', layout);
+    SEGMENTS.forEach(s => {
+      if (!s.video) return;
+      try { s.video.pause(); s.video.removeAttribute('src'); s.video.load(); } catch (_) {}
+      s.video = null;
+    });
+    objectUrls.forEach(url => URL.revokeObjectURL(url));
+    objectUrls.clear();
+    SECTIONS.forEach(section => {
+      if (SEGMENTS.includes(section._seg)) delete section._seg;
+    });
+    [sky, scrollbar, topbar, stage, copylayer, route, hint, track].forEach(node => node.remove());
+    if (!container.querySelector('.sw-stage')) container.classList.remove('sw-root');
+  }
+  return { destroy };
 
   // ---- helpers ----
   function el(tag, cls) { const n = document.createElement(tag); if (cls) n.className = cls; return n; }
